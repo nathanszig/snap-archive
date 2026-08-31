@@ -1,36 +1,53 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# SnapArchive (`snap-export`)
 
-## Getting Started
+Outil web **100% client-side** pour transformer l'export officiel Snapchat
+(`memories_history.json`) en archive ZIP triée par date.
 
-First, run the development server:
+## Pourquoi
 
-```bash
+Snapchat limite les Memories gratuites à 5 Go et supprime l'excédent après 12 mois.
+L'export officiel est pénible (HTML bugué, milliers de ZIP). SnapArchive automatise
+le téléchargement depuis les liens CDN + organisation `YYYY/MM/`.
+
+## Stack
+
+Next.js 16 · React 19 · TypeScript · Tailwind v4 · JSZip · fflate
+
+## Dev local
+
+```powershell
+cd snap-export
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Ouvre http://localhost:3000
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Build prod (Dokploy)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Type de build : **Dockerfile** (standalone Next.js).
 
-## Learn More
+Variables d'env : aucune obligatoire pour le MVP.
 
-To learn more about Next.js, take a look at the following resources:
+## Flux utilisateur
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+1. Export Snapchat sur accounts.snapchat.com (`Export your Memories` + `Export JSON files`)
+2. Upload `memories_history.json` ou ZIP mydata sur `/export`
+3. Filtre par période
+4. Téléchargement ZIP local
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Limites v2
 
-## Deploy on Vercel
+- Overlays **vidéo** et fusion de fragments → v3 desktop
+- EXIF GPS sur MP4 non supporté (photos JPG/PNG converties oui)
+- Liens Snapchat expirent (~7 jours)
+- Gros comptes → limite RAM navigateur
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Roadmap
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- [x] EXIF dates + GPS (JPEG)
+- [x] Fusion overlays photos
+- [ ] Overlays vidéo (ffmpeg.wasm ou Tauri)
+- [ ] Merge fragments vidéo
+- [ ] App desktop Tauri pour gros volumes
+- [ ] Freemium Stripe (>500 snaps)
