@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type DragEvent } from "react";
 import {
   buildExportZip,
   triggerBlobDownload,
@@ -14,8 +14,8 @@ import {
   getMemoryDateBounds,
 } from "@/lib/snapchat/filter-memories";
 import {
-  extractJsonFromZip,
   parseMemoriesJson,
+  resolveMemoriesJsonFromFiles,
 } from "@/lib/snapchat/parse-json";
 import type {
   DownloadProgress,
@@ -43,6 +43,8 @@ export function ExportTool() {
   const [fromDate, setFromDate] = useState<string>("");
   const [toDate, setToDate] = useState<string>("");
   const [exportOptions, setExportOptions] = useState<ExportOptions>(DEFAULT_EXPORT_OPTIONS);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<DownloadProgress>({
     total: 0,
@@ -67,28 +69,43 @@ export function ExportTool() {
     });
   }, [fromDate, memories, toDate]);
 
-  async function handleFile(file: File) {
+  async function handleFiles(fileList: FileList | File[]) {
+    const files = Array.from(fileList).filter((file) => file.size > 0);
+    if (files.length === 0) return;
+
     setError(null);
+    setImportStatus(null);
+    setIsImporting(true);
     setProgress((state) => ({ ...state, status: "idle", errors: [] }));
 
     try {
-      const jsonText = file.name.toLowerCase().endsWith(".zip")
-        ? await extractJsonFromZip(file)
-        : await file.text();
-
+      const { jsonText, sourceLabel } = await resolveMemoriesJsonFromFiles(
+        files,
+        setImportStatus,
+      );
       const parsed = parseMemoriesJson(jsonText);
       const dateBounds = getMemoryDateBounds(parsed);
 
       setMemories(parsed);
-      setFileLabel(file.name);
+      setFileLabel(sourceLabel);
       setFromDate(toInputDate(dateBounds.min));
       setToDate(toInputDate(dateBounds.max));
+      setImportStatus(null);
       clearPendingExportReminder();
     } catch (caught) {
       setMemories([]);
       setFileLabel(null);
+      setImportStatus(null);
       setError(caught instanceof Error ? caught.message : "Import impossible.");
+    } finally {
+      setIsImporting(false);
     }
+  }
+
+  function handleDrop(event: DragEvent<HTMLLabelElement>) {
+    event.preventDefault();
+    if (isImporting) return;
+    void handleFiles(event.dataTransfer.files);
   }
 
   async function handleExport() {
@@ -174,34 +191,45 @@ export function ExportTool() {
         </p>
         <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Exporter mes Memories</h1>
         <p className="text-muted">
-          Importe{" "}
-          <code className="rounded bg-card px-1.5 py-0.5 font-mono text-sm text-foreground">
-            memories_history.json
-          </code>{" "}
-          ou le ZIP mydata Snapchat. Choisis une période, puis lance le téléchargement.
+          Glisse <strong className="font-medium text-foreground">tous tes ZIP mydata</strong>{" "}
+          téléchargés depuis Snapchat — on trouve le fichier nécessaire automatiquement.
         </p>
       </ScrollReveal>
 
       <ScrollReveal delay={80}>
       <section className="rounded-3xl border border-card-border bg-card p-6">
-        <label className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-card-border bg-background px-6 py-12 text-center transition hover:border-foreground/20">
+        <label
+          className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-card-border bg-background px-6 py-12 text-center transition hover:border-foreground/20"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={handleDrop}
+        >
           <input
             type="file"
             accept=".json,.zip,application/json,application/zip"
+            multiple
             className="hidden"
+            disabled={isImporting}
             onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void handleFile(file);
+              if (event.target.files) void handleFiles(event.target.files);
+              event.target.value = "";
             }}
           />
           <div className="mb-4 flex h-14 w-14 items-center justify-center rounded-2xl border border-card-border bg-card text-accent">
             <IconUpload className="h-7 w-7" />
           </div>
-          <p className="text-lg font-medium">Glisse ton export ici</p>
-          <p className="mt-2 max-w-md text-sm text-muted">
-            memories_history.json ou mydata.zip · max recommandé ~2 000 fichiers par session
-            navigateur
+          <p className="text-lg font-medium">
+            {isImporting ? "Analyse en cours…" : "Glisse tous tes ZIP Snapchat ici"}
           </p>
+          <p className="mt-2 max-w-md text-sm text-muted">
+            Sélectionne ou dépose tous les fichiers{" "}
+            <code className="rounded bg-card px-1.5 py-0.5 font-mono text-xs text-foreground">
+              mydata~….zip
+            </code>{" "}
+            d&apos;un coup — pas besoin de les décompresser.
+          </p>
+          {importStatus ? (
+            <p className="mt-4 text-sm text-muted">{importStatus}</p>
+          ) : null}
           {fileLabel ? (
             <p className="mt-4 rounded-full border border-card-border bg-card px-3 py-1 text-sm text-foreground">
               {fileLabel}
@@ -372,7 +400,7 @@ export function ExportTool() {
             période → Submit
           </li>
           <li>Attends le mail et télécharge tous les ZIP (liens valides ~7 jours)</li>
-          <li>Reviens ici et importe le JSON ou le ZIP mydata</li>
+          <li>Reviens ici et glisse <strong className="text-foreground">tous les ZIP</strong> mydata d&apos;un coup</li>
         </ol>
         <p className="mt-4 font-medium text-foreground">Pendant l&apos;export SnapArchive</p>
         <ul className="mt-2 list-disc space-y-2 pl-5">

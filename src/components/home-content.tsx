@@ -110,8 +110,8 @@ const steps = [
     body: "Tout se passe dans ton navigateur. Rien n'est envoyé sur nos serveurs.",
     details: [
       "Va sur la page Exporter",
-      "Glisse memories_history.json ou un ZIP mydata complet",
-      "On détecte automatiquement tes memories et la plage de dates",
+      "Glisse tous les ZIP mydata d'un coup (Ctrl+A dans ton dossier Téléchargements)",
+      "Pas besoin d'ouvrir ou décompresser — on trouve memories_history.json tout seul",
     ],
   },
   {

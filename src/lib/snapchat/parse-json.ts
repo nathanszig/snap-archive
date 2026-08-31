@@ -1,4 +1,7 @@
+import { BlobReader, TextWriter, ZipReader } from "@zip.js/zip.js";
 import type { ParsedMemory, SnapExportPayload, SnapMemory } from "./types";
+
+const MEMORIES_JSON_NAME = "memories_history.json";
 
 function extractMid(link: string): string {
   const match = link.match(/mid=([^&]+)/i);
@@ -41,38 +44,100 @@ function toParsedMemory(entry: SnapMemory): ParsedMemory {
 export function parseMemoriesJson(text: string): ParsedMemory[] {
   const payload = JSON.parse(text) as SnapExportPayload | SnapMemory[];
 
-  const entries = Array.isArray(payload)
-    ? payload
-    : payload["Saved Media"];
+  const entries = Array.isArray(payload) ? payload : payload["Saved Media"];
 
   if (!Array.isArray(entries) || entries.length === 0) {
     throw new Error(
-      "Aucune memory trouvée. Vérifie que tu as exporté memories_history.json avec « Export JSON files ».",
+      "Aucune memory trouvée. Vérifie que tu as coché « Export JSON files » sur Snapchat.",
     );
   }
 
   return entries.map(toParsedMemory);
 }
 
-export async function extractJsonFromZip(file: File): Promise<string> {
-  const { unzip } = await import("fflate");
-  const buffer = new Uint8Array(await file.arrayBuffer());
-  const archive = await new Promise<Record<string, Uint8Array>>((resolve, reject) => {
-    unzip(buffer, (error, data) => {
-      if (error) reject(error);
-      else resolve(data);
-    });
-  });
+function isMemoriesJsonFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return name.endsWith(".json") && name.includes("memories");
+}
 
-  const jsonPath = Object.keys(archive).find((path) =>
-    path.toLowerCase().endsWith("memories_history.json"),
-  );
+function isMydataZip(file: File): boolean {
+  return file.name.toLowerCase().endsWith(".zip");
+}
 
-  if (!jsonPath) {
+export async function extractJsonFromZip(file: File): Promise<string | null> {
+  const reader = new ZipReader(new BlobReader(file));
+
+  try {
+    const entries = await reader.getEntries();
+    const jsonEntry = entries.find(
+      (entry) =>
+        !entry.directory &&
+        entry.filename.toLowerCase().endsWith(MEMORIES_JSON_NAME),
+    );
+
+    if (!jsonEntry || jsonEntry.directory) return null;
+
+    return jsonEntry.getData(new TextWriter());
+  } finally {
+    await reader.close();
+  }
+}
+
+export interface ResolvedMemoriesImport {
+  jsonText: string;
+  sourceLabel: string;
+}
+
+export async function resolveMemoriesJsonFromFiles(
+  files: File[],
+  onProgress?: (message: string) => void,
+): Promise<ResolvedMemoriesImport> {
+  if (files.length === 0) {
+    throw new Error("Aucun fichier sélectionné.");
+  }
+
+  const jsonFiles = files.filter(isMemoriesJsonFile);
+  if (jsonFiles.length === 1) {
+    return {
+      jsonText: await jsonFiles[0].text(),
+      sourceLabel: jsonFiles[0].name,
+    };
+  }
+
+  const zipFiles = files.filter(isMydataZip).sort((a, b) => a.size - b.size);
+  if (zipFiles.length === 0) {
     throw new Error(
-      "memories_history.json introuvable dans le ZIP. Exporte bien tes données avec « Export JSON files ».",
+      "Fichier non reconnu. Glisse tes ZIP mydata Snapchat (ou memories_history.json).",
     );
   }
 
-  return new TextDecoder("utf-8").decode(archive[jsonPath]);
+  for (let index = 0; index < zipFiles.length; index += 1) {
+    const zip = zipFiles[index];
+    onProgress?.(
+      zipFiles.length > 1
+        ? `Analyse ${zip.name} (${index + 1}/${zipFiles.length})…`
+        : `Analyse de ${zip.name}…`,
+    );
+
+    try {
+      const jsonText = await extractJsonFromZip(zip);
+      if (jsonText) {
+        return {
+          jsonText,
+          sourceLabel:
+            zipFiles.length > 1
+              ? `${zipFiles.length} ZIP Snapchat · trouvé dans ${zip.name}`
+              : zip.name,
+        };
+      }
+    } catch {
+      // Try the next archive — Snapchat splits exports across several ZIPs.
+    }
+  }
+
+  throw new Error(
+    zipFiles.length > 1
+      ? "memories_history.json introuvable dans tes ZIP. Vérifie que tu as bien coché « Export JSON files » et que tu as téléchargé tous les fichiers mydata."
+      : "memories_history.json introuvable dans ce ZIP. Coche « Export JSON files » sur Snapchat ou ajoute les autres parties mydata.",
+  );
 }
