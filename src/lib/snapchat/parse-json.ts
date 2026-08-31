@@ -1,7 +1,14 @@
-import { BlobReader, TextWriter, ZipReader } from "@zip.js/zip.js";
-import type { ParsedMemory, SnapExportPayload, SnapMemory } from "./types";
+import { BlobReader, TextWriter, Uint8ArrayWriter, ZipReader } from "@zip.js/zip.js";
+import type {
+  ImportMode,
+  MemoriesImportResult,
+  ParsedMemory,
+  SnapExportPayload,
+  SnapMemory,
+} from "./types";
 
 const MEMORIES_JSON_NAME = "memories_history.json";
+const MAIN_FILE_PATTERN = /\/memories\/(.+)-main\.(jpg|jpeg|png|mp4)$/i;
 
 function extractMid(link: string): string {
   const match = link.match(/mid=([^&]+)/i);
@@ -27,23 +34,230 @@ function parseSnapDate(raw: string): Date {
   return date;
 }
 
-function toParsedMemory(entry: SnapMemory): ParsedMemory {
-  if (!entry["Download Link"]) {
-    throw new Error("Entrée sans lien de téléchargement.");
+function getDownloadLink(entry: SnapMemory): string | null {
+  const candidates = [entry["Download Link"], entry["Media Download Url"]];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") continue;
+    const trimmed = candidate.trim();
+    if (!trimmed || trimmed.toUpperCase() === "N/A") continue;
+    if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+      return trimmed;
+    }
   }
 
+  return null;
+}
+
+function normalizeMediaKind(mediaType: string): "image" | "video" {
+  return mediaType.toLowerCase().includes("video") ? "video" : "image";
+}
+
+function dayKey(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function toCdnMemory(entry: SnapMemory, downloadLink: string): ParsedMemory {
   return {
-    id: extractMid(entry["Download Link"]),
+    id: extractMid(downloadLink),
     date: parseSnapDate(entry.Date),
     mediaType: entry["Media Type"],
     location: entry.Location,
-    downloadLink: entry["Download Link"],
+    downloadLink,
   };
 }
 
-export function parseMemoriesJson(text: string): ParsedMemory[] {
-  const payload = JSON.parse(text) as SnapExportPayload | SnapMemory[];
+function toBundledMemory(entry: SnapMemory, index: number): ParsedMemory {
+  const date = parseSnapDate(entry.Date);
+  return {
+    id: `${date.getTime()}-${normalizeMediaKind(entry["Media Type"])}-${index}`,
+    date,
+    mediaType: entry["Media Type"],
+    location: entry.Location,
+  };
+}
 
+interface IndexedMainFile {
+  zipFile: File;
+  mainPath: string;
+  dateMs: number | null;
+  dayKey: string;
+  mediaKind: "image" | "video";
+  overlayPaths: string[];
+}
+
+function isSecondaryMydataZip(name: string): boolean {
+  return /-\d+\.zip$/i.test(name);
+}
+
+function parseMainPath(
+  path: string,
+  lastModDate?: Date,
+): Omit<IndexedMainFile, "zipFile" | "overlayPaths"> | null {
+  const match = path.match(MAIN_FILE_PATTERN);
+  if (!match) return null;
+
+  const base = match[1];
+  const extension = match[2].toLowerCase();
+  const msMatch = base.match(/^(\d{10,13})/);
+  let dateMs = msMatch ? Number(msMatch[1]) : null;
+
+  const humanDateMatch = base.match(/(\d{4}-\d{2}-\d{2})[_-](\d{2})-(\d{2})-(\d{2})/);
+  if (humanDateMatch) {
+    dateMs = Date.parse(
+      `${humanDateMatch[1]}T${humanDateMatch[2]}:${humanDateMatch[3]}:${humanDateMatch[4]}Z`,
+    );
+  }
+
+  if (dateMs === null && lastModDate) {
+    dateMs = lastModDate.getTime();
+  }
+
+  return {
+    mainPath: path,
+    dateMs,
+    dayKey: dateMs ? dayKey(new Date(dateMs)) : lastModDate ? dayKey(lastModDate) : "",
+    mediaKind: extension === "mp4" ? "video" : "image",
+  };
+}
+
+function findOverlayPaths(mainPath: string, paths: string[]): string[] {
+  const base = mainPath.replace(/-main\.[^/]+$/i, "");
+  return paths
+    .filter(
+      (path) =>
+        path.startsWith(`${base}-overlay.`) ||
+        path.startsWith(`${base}_-overlay.`),
+    )
+    .sort((left, right) => left.localeCompare(right));
+}
+
+async function indexMainFilesFromZip(
+  zipFile: File,
+  onProgress?: (message: string) => void,
+): Promise<IndexedMainFile[]> {
+  onProgress?.(`Indexation ${zipFile.name}…`);
+
+  const reader = new ZipReader(new BlobReader(zipFile));
+  try {
+    const entries = await reader.getEntries();
+    const paths = entries
+      .filter((entry) => !entry.directory)
+      .map((entry) => entry.filename.replace(/\\/g, "/"));
+
+    const indexed: IndexedMainFile[] = [];
+
+    for (const entry of entries) {
+      if (entry.directory) continue;
+      const path = entry.filename.replace(/\\/g, "/");
+      const parsed = parseMainPath(path, entry.lastModDate);
+      if (!parsed) continue;
+
+      indexed.push({
+        zipFile,
+        ...parsed,
+        overlayPaths: findOverlayPaths(path, paths),
+      });
+    }
+
+    return indexed;
+  } finally {
+    await reader.close();
+  }
+}
+
+function takeFromBucket(
+  bucket: IndexedMainFile[],
+  usedPaths: Set<string>,
+): IndexedMainFile | null {
+  while (bucket.length > 0) {
+    const candidate = bucket.shift();
+    if (!candidate || usedPaths.has(candidate.mainPath)) continue;
+    usedPaths.add(candidate.mainPath);
+    return candidate;
+  }
+  return null;
+}
+
+function matchBundledMemories(
+  memories: ParsedMemory[],
+  indexedFiles: IndexedMainFile[],
+): { memories: ParsedMemory[]; unmatched: number } {
+  const usedPaths = new Set<string>();
+  const byExactMs = new Map<string, IndexedMainFile[]>();
+  const byDayKind = new Map<string, IndexedMainFile[]>();
+
+  for (const file of indexedFiles) {
+    if (file.dateMs !== null) {
+      const exactKey = `${file.dateMs}:${file.mediaKind}`;
+      const exactBucket = byExactMs.get(exactKey) ?? [];
+      exactBucket.push(file);
+      byExactMs.set(exactKey, exactBucket);
+    }
+
+    const day = file.dayKey || (file.dateMs ? dayKey(new Date(file.dateMs)) : "");
+    if (!day) continue;
+    const dayKeyName = `${day}:${file.mediaKind}`;
+    const dayBucket = byDayKind.get(dayKeyName) ?? [];
+    dayBucket.push(file);
+    byDayKind.set(dayKeyName, dayBucket);
+  }
+
+  let unmatched = 0;
+  const matched: ParsedMemory[] = [];
+
+  for (const memory of memories) {
+    const mediaKind = normalizeMediaKind(memory.mediaType);
+    const exactKey = `${memory.date.getTime()}:${mediaKind}`;
+    let file =
+      takeFromBucket([...(byExactMs.get(exactKey) ?? [])], usedPaths) ??
+      findByTimestampInPath(memory, mediaKind, indexedFiles, usedPaths) ??
+      takeFromBucket([...(byDayKind.get(`${dayKey(memory.date)}:${mediaKind}`) ?? [])], usedPaths);
+
+    if (!file) {
+      unmatched += 1;
+      continue;
+    }
+
+    matched.push({
+      ...memory,
+      id: file.mainPath.split("/").pop()?.replace(/-main\.[^.]+$/, "") ?? memory.id,
+      localSource: {
+        zipFile: file.zipFile,
+        mainPath: file.mainPath,
+        overlayPaths: file.overlayPaths,
+      },
+    });
+  }
+
+  return { memories: matched, unmatched };
+}
+
+function findByTimestampInPath(
+  memory: ParsedMemory,
+  mediaKind: "image" | "video",
+  indexedFiles: IndexedMainFile[],
+  usedPaths: Set<string>,
+): IndexedMainFile | null {
+  const timestamp = String(memory.date.getTime());
+
+  for (const file of indexedFiles) {
+    if (usedPaths.has(file.mainPath)) continue;
+    if (file.mediaKind !== mediaKind) continue;
+    if (!file.mainPath.includes(timestamp)) continue;
+    usedPaths.add(file.mainPath);
+    return file;
+  }
+
+  return null;
+}
+
+export function parseMemoriesJson(text: string): {
+  cdnMemories: ParsedMemory[];
+  bundledEntries: SnapMemory[];
+  skippedNoLink: number;
+} {
+  const payload = JSON.parse(text) as SnapExportPayload | SnapMemory[];
   const entries = Array.isArray(payload) ? payload : payload["Saved Media"];
 
   if (!Array.isArray(entries) || entries.length === 0) {
@@ -52,7 +266,22 @@ export function parseMemoriesJson(text: string): ParsedMemory[] {
     );
   }
 
-  return entries.map(toParsedMemory);
+  const cdnMemories: ParsedMemory[] = [];
+  const bundledEntries: SnapMemory[] = [];
+  let skippedNoLink = 0;
+
+  for (const entry of entries) {
+    const downloadLink = getDownloadLink(entry);
+    if (downloadLink) {
+      cdnMemories.push(toCdnMemory(entry, downloadLink));
+    } else if (entry.Date && entry["Media Type"]) {
+      bundledEntries.push(entry);
+    } else {
+      skippedNoLink += 1;
+    }
+  }
+
+  return { cdnMemories, bundledEntries, skippedNoLink };
 }
 
 function isMemoriesJsonFile(file: File): boolean {
@@ -69,11 +298,14 @@ export async function extractJsonFromZip(file: File): Promise<string | null> {
 
   try {
     const entries = await reader.getEntries();
-    const jsonEntry = entries.find(
-      (entry) =>
-        !entry.directory &&
-        entry.filename.toLowerCase().endsWith(MEMORIES_JSON_NAME),
-    );
+    const jsonEntry = entries
+      .filter((entry) => !entry.directory)
+      .sort((left, right) => {
+        const leftScore = left.filename.toLowerCase().includes("json/") ? 0 : 1;
+        const rightScore = right.filename.toLowerCase().includes("json/") ? 0 : 1;
+        return leftScore - rightScore;
+      })
+      .find((entry) => entry.filename.toLowerCase().endsWith(MEMORIES_JSON_NAME));
 
     if (!jsonEntry || jsonEntry.directory) return null;
 
@@ -83,61 +315,131 @@ export async function extractJsonFromZip(file: File): Promise<string | null> {
   }
 }
 
-export interface ResolvedMemoriesImport {
-  jsonText: string;
-  sourceLabel: string;
+function sortZipFilesForImport(files: File[]): File[] {
+  return [...files].sort((left, right) => {
+    const leftSecondary = isSecondaryMydataZip(left.name);
+    const rightSecondary = isSecondaryMydataZip(right.name);
+    if (leftSecondary !== rightSecondary) return leftSecondary ? 1 : -1;
+    return left.size - right.size;
+  });
 }
 
-export async function resolveMemoriesJsonFromFiles(
+export async function resolveMemoriesImport(
   files: File[],
   onProgress?: (message: string) => void,
-): Promise<ResolvedMemoriesImport> {
+): Promise<MemoriesImportResult> {
   if (files.length === 0) {
     throw new Error("Aucun fichier sélectionné.");
   }
 
   const jsonFiles = files.filter(isMemoriesJsonFile);
+  const zipFiles = files.filter(isMydataZip);
+
+  let jsonText: string | null = null;
+  let jsonSource = "";
+
   if (jsonFiles.length === 1) {
-    return {
-      jsonText: await jsonFiles[0].text(),
-      sourceLabel: jsonFiles[0].name,
-    };
-  }
+    jsonText = await jsonFiles[0].text();
+    jsonSource = jsonFiles[0].name;
+  } else if (zipFiles.length > 0) {
+    const orderedZips = sortZipFilesForImport(zipFiles);
 
-  const zipFiles = files.filter(isMydataZip).sort((a, b) => a.size - b.size);
-  if (zipFiles.length === 0) {
-    throw new Error(
-      "Fichier non reconnu. Glisse tes ZIP mydata Snapchat (ou memories_history.json).",
-    );
-  }
+    for (let index = 0; index < orderedZips.length; index += 1) {
+      const zip = orderedZips[index];
+      onProgress?.(
+        orderedZips.length > 1
+          ? `Analyse ${zip.name} (${index + 1}/${orderedZips.length})…`
+          : `Analyse de ${zip.name}…`,
+      );
 
-  for (let index = 0; index < zipFiles.length; index += 1) {
-    const zip = zipFiles[index];
-    onProgress?.(
-      zipFiles.length > 1
-        ? `Analyse ${zip.name} (${index + 1}/${zipFiles.length})…`
-        : `Analyse de ${zip.name}…`,
-    );
-
-    try {
-      const jsonText = await extractJsonFromZip(zip);
-      if (jsonText) {
-        return {
-          jsonText,
-          sourceLabel:
-            zipFiles.length > 1
-              ? `${zipFiles.length} ZIP Snapchat · trouvé dans ${zip.name}`
-              : zip.name,
-        };
+      try {
+        const extracted = await extractJsonFromZip(zip);
+        if (extracted) {
+          jsonText = extracted;
+          jsonSource = zip.name;
+          break;
+        }
+      } catch {
+        // Try the next archive.
       }
-    } catch {
-      // Try the next archive — Snapchat splits exports across several ZIPs.
     }
   }
 
-  throw new Error(
-    zipFiles.length > 1
-      ? "memories_history.json introuvable dans tes ZIP. Vérifie que tu as bien coché « Export JSON files » et que tu as téléchargé tous les fichiers mydata."
-      : "memories_history.json introuvable dans ce ZIP. Coche « Export JSON files » sur Snapchat ou ajoute les autres parties mydata.",
-  );
+  if (!jsonText) {
+    throw new Error(
+      zipFiles.length > 0
+        ? "memories_history.json introuvable dans tes ZIP. Vérifie que tu as coché « Export JSON files » et ajouté tous les fichiers mydata."
+        : "Fichier non reconnu. Glisse tes ZIP mydata Snapchat (ou memories_history.json).",
+    );
+  }
+
+  const { cdnMemories, bundledEntries, skippedNoLink } = parseMemoriesJson(jsonText);
+
+  if (cdnMemories.length > 0) {
+    return {
+      memories: cdnMemories,
+      mode: "cdn",
+      sourceLabel:
+        zipFiles.length > 1
+          ? `${zipFiles.length} ZIP Snapchat · JSON dans ${jsonSource}`
+          : jsonSource || jsonFiles[0]?.name || "memories_history.json",
+      skippedNoLink,
+      unmatchedLocal: 0,
+    };
+  }
+
+  if (bundledEntries.length === 0) {
+    throw new Error(
+      "Export Snapchat vide ou illisible. Vérifie que « Export JSON files » était bien coché.",
+    );
+  }
+
+  onProgress?.("Indexation des médias dans tes ZIP…");
+
+  const indexedFiles: IndexedMainFile[] = [];
+  for (const zip of sortZipFilesForImport(zipFiles.length > 0 ? zipFiles : files.filter(isMydataZip))) {
+    indexedFiles.push(...(await indexMainFilesFromZip(zip, onProgress)));
+  }
+
+  if (indexedFiles.length === 0) {
+    throw new Error(
+      "Aucun fichier media trouvé dans tes ZIP. Vérifie que tu as bien téléchargé tous les mydata~….zip depuis Snapchat.",
+    );
+  }
+
+  const bundledMemories = bundledEntries.map(toBundledMemory);
+  const { memories, unmatched } = matchBundledMemories(bundledMemories, indexedFiles);
+
+  if (memories.length === 0) {
+    throw new Error(
+      "Impossible d'associer le JSON aux fichiers media. Vérifie que tous les ZIP mydata sont bien présents.",
+    );
+  }
+
+  return {
+    memories,
+    mode: "bundled",
+    sourceLabel: `${zipFiles.length || files.length} ZIP Snapchat · export media inclus (${indexedFiles.length.toLocaleString("fr-FR")} fichiers)`,
+    skippedNoLink,
+    unmatchedLocal: unmatched,
+  };
+}
+
+export async function readZipEntryBytes(zipFile: File, entryPath: string): Promise<Uint8Array> {
+  const reader = new ZipReader(new BlobReader(zipFile));
+
+  try {
+    const entries = await reader.getEntries();
+    const entry = entries.find(
+      (candidate) => !candidate.directory && candidate.filename.replace(/\\/g, "/") === entryPath,
+    );
+
+    if (!entry || entry.directory) {
+      throw new Error(`Fichier introuvable dans l'archive : ${entryPath}`);
+    }
+
+    return entry.getData(new Uint8ArrayWriter());
+  } finally {
+    await reader.close();
+  }
 }

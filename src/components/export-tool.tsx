@@ -6,21 +6,19 @@ import {
   triggerBlobDownload,
 } from "@/lib/snapchat/build-export-zip";
 import {
-  downloadMemoryFile,
   mapWithConcurrency,
+  resolveMemoryFile,
 } from "@/lib/snapchat/download-memory";
 import {
   filterMemoriesByRange,
   getMemoryDateBounds,
 } from "@/lib/snapchat/filter-memories";
-import {
-  parseMemoriesJson,
-  resolveMemoriesJsonFromFiles,
-} from "@/lib/snapchat/parse-json";
+import { resolveMemoriesImport } from "@/lib/snapchat/parse-json";
 import type {
   DownloadProgress,
   ExportOptions,
   ExportedFile,
+  ImportMode,
   ParsedMemory,
 } from "@/lib/snapchat/types";
 import { DEFAULT_EXPORT_OPTIONS } from "@/lib/snapchat/types";
@@ -40,6 +38,8 @@ function formatDisplayDate(date: Date): string {
 export function ExportTool() {
   const [memories, setMemories] = useState<ParsedMemory[]>([]);
   const [fileLabel, setFileLabel] = useState<string | null>(null);
+  const [importMode, setImportMode] = useState<ImportMode | null>(null);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
   const [fromDate, setFromDate] = useState<string>("");
   const [toDate, setToDate] = useState<string>("");
   const [exportOptions, setExportOptions] = useState<ExportOptions>(DEFAULT_EXPORT_OPTIONS);
@@ -79,22 +79,40 @@ export function ExportTool() {
     setProgress((state) => ({ ...state, status: "idle", errors: [] }));
 
     try {
-      const { jsonText, sourceLabel } = await resolveMemoriesJsonFromFiles(
-        files,
-        setImportStatus,
-      );
-      const parsed = parseMemoriesJson(jsonText);
-      const dateBounds = getMemoryDateBounds(parsed);
+      const result = await resolveMemoriesImport(files, setImportStatus);
+      const dateBounds = getMemoryDateBounds(result.memories);
 
-      setMemories(parsed);
-      setFileLabel(sourceLabel);
+      setMemories(result.memories);
+      setFileLabel(result.sourceLabel);
+      setImportMode(result.mode);
       setFromDate(toInputDate(dateBounds.min));
       setToDate(toInputDate(dateBounds.max));
       setImportStatus(null);
+
+      const notices: string[] = [];
+      if (result.mode === "bundled") {
+        notices.push(
+          "Export Snapchat récent détecté : les photos sont lues directement depuis tes ZIP (sans lien de téléchargement).",
+        );
+      }
+      if (result.unmatchedLocal > 0) {
+        notices.push(
+          `${result.unmatchedLocal.toLocaleString("fr-FR")} memories n'ont pas pu être associées à un fichier.`,
+        );
+      }
+      if (result.skippedNoLink > 0) {
+        notices.push(
+          `${result.skippedNoLink.toLocaleString("fr-FR")} entrées ignorées (métadonnées incomplètes).`,
+        );
+      }
+      setImportNotice(notices.length > 0 ? notices.join(" ") : null);
+
       clearPendingExportReminder();
     } catch (caught) {
       setMemories([]);
       setFileLabel(null);
+      setImportMode(null);
+      setImportNotice(null);
       setImportStatus(null);
       setError(caught instanceof Error ? caught.message : "Import impossible.");
     } finally {
@@ -136,7 +154,7 @@ export function ExportTool() {
       }));
 
       try {
-        const file = await downloadMemoryFile(memory, exportOptions);
+        const file = await resolveMemoryFile(memory, exportOptions);
         exportedFiles.push(file);
         completed += 1;
       } catch (caught) {
@@ -239,7 +257,7 @@ export function ExportTool() {
 
         {memories.length > 0 ? (
           <div className="mt-6 grid gap-4 sm:grid-cols-3">
-            <Stat label="Memories totales" value={memories.length.toLocaleString("fr-FR")} />
+            <Stat label="Memories détectées" value={memories.length.toLocaleString("fr-FR")} />
             <Stat
               label="Période disponible"
               value={
@@ -254,6 +272,19 @@ export function ExportTool() {
               highlight
             />
           </div>
+        ) : null}
+
+        {importNotice ? (
+          <p className="mt-4 rounded-2xl border border-card-border bg-background px-4 py-3 text-sm text-muted">
+            {importNotice}
+          </p>
+        ) : null}
+
+        {importMode === "bundled" ? (
+          <p className="mt-3 text-xs text-muted">
+            Mode export media inclus : inutile d&apos;extraire les ZIP — SnapArchive lit les fichiers
+            dans <code className="font-mono text-foreground">memories/</code> directement.
+          </p>
         ) : null}
       </section>
       </ScrollReveal>
