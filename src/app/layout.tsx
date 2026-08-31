@@ -1,8 +1,12 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Link from "next/link";
+import Script from "next/script";
 import { PendingExportBanner } from "@/components/export-reminder";
+import { SITE_NAME, getSiteOrigin } from "@/lib/seo";
 import "./globals.css";
+
+const UMAMI_WEBSITE_ID = "61578fb3-4b92-4ec1-9229-ad9dc2568eed";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -15,18 +19,23 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "SnapArchive — Exporte tes Memories Snapchat",
+  metadataBase: new URL(getSiteOrigin()),
+  title: {
+    default: `${SITE_NAME} — Exporte tes Memories Snapchat`,
+    template: `%s · ${SITE_NAME}`,
+  },
   description:
     "Transforme l'export Snapchat incompréhensible en un dossier photo propre. 100% dans ton navigateur, rien n'est envoyé sur nos serveurs.",
   icons: {
     icon: "/icon.svg",
   },
   openGraph: {
-    title: "SnapArchive — Sauve tes Memories avant la suppression",
-    description:
-      "Choisis une période, télécharge tes snaps depuis l'export officiel Snapchat, récupère un ZIP trié par date.",
+    siteName: SITE_NAME,
     locale: "fr_FR",
     type: "website",
+  },
+  twitter: {
+    card: "summary_large_image",
   },
 };
 
@@ -67,6 +76,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
               <p>Non affilié à Snap Inc.</p>
             </div>
             <nav className="flex flex-wrap gap-x-4 gap-y-1">
+              <Link href="/guide/exporter-memories-snapchat" className="hover:text-foreground">
+                Guide export Snap
+              </Link>
+              <Link href="/guide/snapchat-memories-5-go" className="hover:text-foreground">
+                Limite 5 Go
+              </Link>
               <Link href="/mentions-legales" className="hover:text-foreground">
                 Mentions légales
               </Link>
@@ -79,6 +94,14 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             </nav>
           </div>
         </footer>
+        {process.env.NODE_ENV === "production" ? (
+          <Script
+            defer
+            src="https://analytics.webcooked.fr/script.js"
+            data-website-id={UMAMI_WEBSITE_ID}
+            strategy="afterInteractive"
+          />
+        ) : null}
       </body>
     </html>
   );

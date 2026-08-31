@@ -95,14 +95,34 @@ export default function ConfidentialitePage() {
       <section>
         <h2>5. Cookies et mesure d&apos;audience</h2>
         <p>
-          À ce jour, SnapArchive <strong>n&apos;utilise pas de cookies</strong> de suivi ni
-          de cookies publicitaires. Aucun outil d&apos;analytics n&apos;est actif en
-          production.
+          SnapArchive utilise <strong>Umami</strong> (
+          <a
+            href="https://analytics.webcooked.fr"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            analytics.webcooked.fr
+          </a>
+          ), hébergé par l&apos;éditeur, pour mesurer l&apos;audience du site : pages
+          consultées, pays, type d&apos;appareil, source de trafic.
         </p>
+        <ul>
+          <li>
+            <strong>Sans cookies</strong> — Umami ne dépose pas de cookie publicitaire ni de
+            cookie de suivi cross-site ;
+          </li>
+          <li>
+            <strong>Données agrégées</strong> — aucune photo, vidéo ou export Snapchat n&apos;est
+            transmis ;
+          </li>
+          <li>
+            <strong>Pas de revente</strong> — les statistiques servent uniquement à améliorer le
+            service.
+          </li>
+        </ul>
         <p>
-          Si une mesure d&apos;audience respectueuse du RGPD (par exemple Umami sans cookies)
-          est ajoutée ultérieurement, cette politique sera mise à jour et toute collecte
-          sera limitée à des statistiques agrégées et anonymisées.
+          Tu peux bloquer ce script via ton bloqueur de publicités ou les paramètres de ton
+          navigateur sans impact sur l&apos;outil d&apos;export (100 % local).
         </p>
       </section>
 

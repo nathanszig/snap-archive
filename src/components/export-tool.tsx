@@ -29,6 +29,7 @@ import type {
   ParsedMemory,
 } from "@/lib/snapchat/types";
 import { DEFAULT_EXPORT_OPTIONS } from "@/lib/snapchat/types";
+import { trackEvent } from "@/lib/analytics";
 import { clearPendingExportReminder } from "@/lib/reminder";
 import { ExportReminderPanel } from "@/components/export-reminder";
 import { IconArchive, IconUpload } from "@/components/icons";
@@ -130,6 +131,10 @@ export function ExportTool() {
       const outsideFree = getOutsideFreeTierSelection(result.memories);
       if (outsideFree) {
         applySelection(outsideFree, setFromDate, setToDate, setActivePreset, "outside-free");
+        trackEvent("preset_outside_free", {
+          source: "auto",
+          count: String(outsideFree.count),
+        });
         setFreeTierNotice(
           `${outsideFree.count.toLocaleString("fr-FR")} memories (~${formatBytes(outsideFree.totalBytes)}) hors des 5 Go gratuits Snap — période présélectionnée.${outsideFree.usesEstimatedSizes ? " Estimation basée sur la taille réelle des fichiers quand disponible." : ""}`,
         );
@@ -166,6 +171,12 @@ export function ExportTool() {
       }
       setImportNotice(notices.length > 0 ? notices.join(" ") : null);
 
+      trackEvent("zip_imported", {
+        mode: result.mode,
+        count: String(result.memories.length),
+        unmatched: String(result.unmatchedLocal),
+      });
+
       clearPendingExportReminder();
     } catch (caught) {
       setMemories([]);
@@ -201,6 +212,11 @@ export function ExportTool() {
       currentLabel: "Démarrage…",
       status: "running",
       errors: [],
+    });
+
+    trackEvent("export_started", {
+      count: String(filteredMemories.length),
+      preset: activePreset,
     });
 
     const exportedFiles: ExportedFile[] = [];
@@ -256,13 +272,18 @@ export function ExportTool() {
       currentLabel: "Export terminé",
       errors,
     }));
+
+    trackEvent("export_done", {
+      count: String(exportedFiles.length),
+      failed: String(failed),
+    });
   }
 
   const progressRatio =
     progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-8 px-6 py-12">
+    <div className="mx-auto min-w-0 max-w-4xl space-y-8 overflow-x-hidden px-6 py-12">
       <ScrollReveal className="space-y-3">
         <p className="inline-flex items-center gap-2 rounded-full border border-card-border bg-card px-3 py-1 text-xs uppercase tracking-[0.15em] text-muted">
           <IconArchive className="h-4 w-4 text-accent" />
@@ -276,7 +297,7 @@ export function ExportTool() {
       </ScrollReveal>
 
       <ScrollReveal delay={80}>
-      <section className="rounded-3xl border border-card-border bg-card p-6">
+      <section className="min-w-0 overflow-hidden rounded-3xl border border-card-border bg-card p-4 sm:p-6">
         <label
           className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-card-border bg-background px-6 py-12 text-center transition hover:border-foreground/20"
           onDragOver={(event) => event.preventDefault()}
@@ -318,7 +339,7 @@ export function ExportTool() {
 
         {memories.length > 0 ? (
           <>
-            <div className="mt-6 grid gap-4 sm:grid-cols-3">
+            <div className="mt-6 min-w-0 grid gap-4 sm:grid-cols-3">
               <Stat label="Memories détectées" value={memories.length.toLocaleString("fr-FR")} />
               <Stat
                 label="Période disponible"
@@ -335,7 +356,7 @@ export function ExportTool() {
               />
             </div>
 
-            <div className="mt-6 rounded-2xl border border-card-border bg-background p-4 sm:p-5">
+            <div className="mt-6 min-w-0 overflow-hidden rounded-2xl border border-card-border bg-background p-4 sm:p-5">
               <h2 className="text-base font-medium">Filtrer par période</h2>
               <p className="mt-1 text-sm text-muted">
                 Raccourci ou dates manuelles — cible surtout les memories hors quota Snap gratuit.
@@ -350,15 +371,19 @@ export function ExportTool() {
                     label="Hors 5 Go Snap"
                     detail={`${outsideFreeSelection.count.toLocaleString("fr-FR")} memories · ~${formatBytes(outsideFreeSelection.totalBytes)}`}
                     recommended
-                    onClick={() =>
+                    onClick={() => {
                       applySelection(
                         outsideFreeSelection,
                         setFromDate,
                         setToDate,
                         setActivePreset,
                         "outside-free",
-                      )
-                    }
+                      );
+                      trackEvent("preset_outside_free", {
+                        source: "manual",
+                        count: String(outsideFreeSelection.count),
+                      });
+                    }}
                   />
                 ) : null}
                 {fullSelection ? (
@@ -395,8 +420,8 @@ export function ExportTool() {
                 ) : null}
               </div>
 
-              <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <label className="space-y-2 text-sm">
+              <div className="mt-4 grid min-w-0 gap-3 sm:grid-cols-2 sm:gap-4">
+                <label className="min-w-0 space-y-2 text-sm">
                   <span className="text-muted">Du</span>
                   <input
                     type="date"
@@ -407,10 +432,10 @@ export function ExportTool() {
                       setFromDate(event.target.value);
                       setActivePreset("custom");
                     }}
-                    className="w-full rounded-xl border border-card-border bg-card px-3 py-2.5 text-foreground [color-scheme:dark]"
+                    className="date-input box-border w-full min-w-0 max-w-full rounded-xl border border-card-border bg-card px-3 py-2.5 text-foreground [color-scheme:dark]"
                   />
                 </label>
-                <label className="space-y-2 text-sm">
+                <label className="min-w-0 space-y-2 text-sm">
                   <span className="text-muted">Au</span>
                   <input
                     type="date"
@@ -421,7 +446,7 @@ export function ExportTool() {
                       setToDate(event.target.value);
                       setActivePreset("custom");
                     }}
-                    className="w-full rounded-xl border border-card-border bg-card px-3 py-2.5 text-foreground [color-scheme:dark]"
+                    className="date-input box-border w-full min-w-0 max-w-full rounded-xl border border-card-border bg-card px-3 py-2.5 text-foreground [color-scheme:dark]"
                   />
                 </label>
               </div>
@@ -651,9 +676,13 @@ function Stat({
   highlight?: boolean;
 }) {
   return (
-    <div className="rounded-2xl border border-card-border bg-background p-4">
+    <div className="min-w-0 rounded-2xl border border-card-border bg-background p-4">
       <p className="text-sm text-muted">{label}</p>
-      <p className={`mt-2 text-lg font-medium ${highlight ? "text-accent" : ""}`}>{value}</p>
+      <p
+        className={`mt-2 break-words text-base font-medium leading-snug sm:text-lg ${highlight ? "text-accent" : ""}`}
+      >
+        {value}
+      </p>
     </div>
   );
 }

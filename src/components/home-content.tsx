@@ -273,6 +273,52 @@ export function HomeContent() {
         </div>
       </section>
 
+      <section className="relative border-t border-card-border/70 bg-card/20 px-6 py-16">
+        <div className="mx-auto max-w-6xl">
+          <ScrollReveal>
+            <p className="text-sm font-medium uppercase tracking-[0.15em] text-accent">Guides</p>
+            <h2 className="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">
+              Tout savoir avant d&apos;exporter
+            </h2>
+            <p className="mt-3 max-w-2xl text-muted">
+              Tutoriels détaillés pour l&apos;export officiel Snapchat et la limite 5 Go des
+              Memories gratuites.
+            </p>
+          </ScrollReveal>
+
+          <div className="mt-8 grid gap-4 md:grid-cols-2">
+            <ScrollReveal delay={80}>
+              <Link
+                href="/guide/exporter-memories-snapchat"
+                className="group block h-full rounded-2xl border border-card-border bg-card p-6 transition hover:border-foreground/15"
+              >
+                <h3 className="text-lg font-medium group-hover:text-accent">
+                  Comment exporter ses Memories Snapchat
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-muted">
+                  Demande d&apos;export sur accounts.snapchat.com, téléchargement des ZIP mydata,
+                  import dans SnapArchive — étape par étape.
+                </p>
+              </Link>
+            </ScrollReveal>
+            <ScrollReveal delay={120}>
+              <Link
+                href="/guide/snapchat-memories-5-go"
+                className="group block h-full rounded-2xl border border-card-border bg-card p-6 transition hover:border-foreground/15"
+              >
+                <h3 className="text-lg font-medium group-hover:text-accent">
+                  Snapchat Memories 5 Go : limite et suppression
+                </h3>
+                <p className="mt-2 text-sm leading-6 text-muted">
+                  Comprends la politique Snap, ce qui est à risque, et comment cibler les
+                  memories hors quota avec le preset dédié.
+                </p>
+              </Link>
+            </ScrollReveal>
+          </div>
+        </div>
+      </section>
+
       <section className="relative border-t border-card-border/70 bg-background px-6 py-16">
         <div className="mx-auto max-w-6xl">
           <ScrollReveal>

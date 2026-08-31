@@ -81,3 +81,16 @@ body {
   background: rgba(255, 252, 0, 0.35);
   color: #111;
 }
+
+.date-input {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+}
+
+@supports (-webkit-touch-callout: none) {
+  .date-input {
+    display: block;
+    inline-size: 100%;
+  }
+}
