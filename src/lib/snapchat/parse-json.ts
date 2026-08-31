@@ -89,6 +89,7 @@ interface IndexedMainFile {
   dayKey: string;
   mediaKind: "image" | "video";
   overlayPaths: string[];
+  mediaSizeBytes?: number;
 }
 
 function isSecondaryMydataZip(name: string): boolean {
@@ -188,6 +189,7 @@ async function indexMainFilesFromZip(
         zipFile,
         ...parsed,
         overlayPaths: findOverlayPaths(path, paths),
+        mediaSizeBytes: entry.uncompressedSize,
       });
     }
 
@@ -253,6 +255,7 @@ function matchBundledMemories(
     matched.push({
       ...memory,
       id: file.mainPath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? memory.id,
+      mediaSizeBytes: file.mediaSizeBytes,
       localSource: {
         zipFile: file.zipFile,
         mainPath: file.mainPath,

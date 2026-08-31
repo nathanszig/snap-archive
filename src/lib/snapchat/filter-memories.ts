@@ -1,5 +1,10 @@
 import type { DateRange, ParsedMemory } from "./types";
 
+export function parseInputDate(value: string): Date {
+  const [year, month, day] = value.split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
 export function filterMemoriesByRange(
   memories: ParsedMemory[],
   range: DateRange,

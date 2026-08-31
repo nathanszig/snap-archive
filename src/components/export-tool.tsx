@@ -12,8 +12,15 @@ import {
 import {
   filterMemoriesByRange,
   getMemoryDateBounds,
+  parseInputDate,
 } from "@/lib/snapchat/filter-memories";
 import { resolveMemoriesImport } from "@/lib/snapchat/parse-json";
+import {
+  formatBytes,
+  getFullRangeSelection,
+  getLastMonthsSelection,
+  getOutsideFreeTierSelection,
+} from "@/lib/snapchat/snap-free-tier";
 import type {
   DownloadProgress,
   ExportOptions,
@@ -28,7 +35,24 @@ import { IconArchive, IconUpload } from "@/components/icons";
 import { ScrollReveal } from "@/components/scroll-reveal";
 
 function toInputDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+type PeriodPreset = "outside-free" | "all" | "recent-12m" | "custom";
+
+function applySelection(
+  selection: { from: Date; to: Date },
+  setFromDate: (value: string) => void,
+  setToDate: (value: string) => void,
+  setActivePreset: (value: PeriodPreset) => void,
+  preset: PeriodPreset,
+): void {
+  setFromDate(toInputDate(selection.from));
+  setToDate(toInputDate(selection.to));
+  setActivePreset(preset);
 }
 
 function formatDisplayDate(date: Date): string {
@@ -42,6 +66,8 @@ export function ExportTool() {
   const [importNotice, setImportNotice] = useState<string | null>(null);
   const [fromDate, setFromDate] = useState<string>("");
   const [toDate, setToDate] = useState<string>("");
+  const [activePreset, setActivePreset] = useState<PeriodPreset>("custom");
+  const [freeTierNotice, setFreeTierNotice] = useState<string | null>(null);
   const [exportOptions, setExportOptions] = useState<ExportOptions>(DEFAULT_EXPORT_OPTIONS);
   const [importStatus, setImportStatus] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
@@ -60,12 +86,27 @@ export function ExportTool() {
     return getMemoryDateBounds(memories);
   }, [memories]);
 
+  const outsideFreeSelection = useMemo(
+    () => getOutsideFreeTierSelection(memories),
+    [memories],
+  );
+
+  const fullSelection = useMemo(() => {
+    if (memories.length === 0) return null;
+    return getFullRangeSelection(memories);
+  }, [memories]);
+
+  const recentSelection = useMemo(
+    () => getLastMonthsSelection(memories, 12),
+    [memories],
+  );
+
   const filteredMemories = useMemo(() => {
     if (memories.length === 0) return [];
 
     return filterMemoriesByRange(memories, {
-      from: fromDate ? new Date(fromDate) : null,
-      to: toDate ? new Date(toDate) : null,
+      from: fromDate ? parseInputDate(fromDate) : null,
+      to: toDate ? parseInputDate(toDate) : null,
     });
   }, [fromDate, memories, toDate]);
 
@@ -85,8 +126,26 @@ export function ExportTool() {
       setMemories(result.memories);
       setFileLabel(result.sourceLabel);
       setImportMode(result.mode);
-      setFromDate(toInputDate(dateBounds.min));
-      setToDate(toInputDate(dateBounds.max));
+
+      const outsideFree = getOutsideFreeTierSelection(result.memories);
+      if (outsideFree) {
+        applySelection(outsideFree, setFromDate, setToDate, setActivePreset, "outside-free");
+        setFreeTierNotice(
+          `${outsideFree.count.toLocaleString("fr-FR")} memories (~${formatBytes(outsideFree.totalBytes)}) hors des 5 Go gratuits Snap — période présélectionnée.${outsideFree.usesEstimatedSizes ? " Estimation basée sur la taille réelle des fichiers quand disponible." : ""}`,
+        );
+      } else {
+        applySelection(
+          getFullRangeSelection(result.memories),
+          setFromDate,
+          setToDate,
+          setActivePreset,
+          "all",
+        );
+        setFreeTierNotice(
+          "Toutes tes memories tiennent dans les 5 Go gratuits Snap. Période complète sélectionnée.",
+        );
+      }
+
       setImportStatus(null);
 
       const notices: string[] = [];
@@ -113,6 +172,8 @@ export function ExportTool() {
       setFileLabel(null);
       setImportMode(null);
       setImportNotice(null);
+      setFreeTierNotice(null);
+      setActivePreset("custom");
       setImportStatus(null);
       setError(caught instanceof Error ? caught.message : "Import impossible.");
     } finally {
@@ -256,22 +317,120 @@ export function ExportTool() {
         </label>
 
         {memories.length > 0 ? (
-          <div className="mt-6 grid gap-4 sm:grid-cols-3">
-            <Stat label="Memories détectées" value={memories.length.toLocaleString("fr-FR")} />
-            <Stat
-              label="Période disponible"
-              value={
-                bounds
-                  ? `${formatDisplayDate(bounds.min)} → ${formatDisplayDate(bounds.max)}`
-                  : "—"
-              }
-            />
-            <Stat
-              label="Sélection actuelle"
-              value={filteredMemories.length.toLocaleString("fr-FR")}
-              highlight
-            />
-          </div>
+          <>
+            <div className="mt-6 grid gap-4 sm:grid-cols-3">
+              <Stat label="Memories détectées" value={memories.length.toLocaleString("fr-FR")} />
+              <Stat
+                label="Période disponible"
+                value={
+                  bounds
+                    ? `${formatDisplayDate(bounds.min)} → ${formatDisplayDate(bounds.max)}`
+                    : "—"
+                }
+              />
+              <Stat
+                label="Sélection actuelle"
+                value={filteredMemories.length.toLocaleString("fr-FR")}
+                highlight
+              />
+            </div>
+
+            <div className="mt-6 rounded-2xl border border-card-border bg-background p-4 sm:p-5">
+              <h2 className="text-base font-medium">Filtrer par période</h2>
+              <p className="mt-1 text-sm text-muted">
+                Raccourci ou dates manuelles — cible surtout les memories hors quota Snap gratuit.
+              </p>
+
+              <div
+                className={`mt-4 grid gap-2 ${outsideFreeSelection ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}
+              >
+                {outsideFreeSelection ? (
+                  <PeriodPresetOption
+                    active={activePreset === "outside-free"}
+                    label="Hors 5 Go Snap"
+                    detail={`${outsideFreeSelection.count.toLocaleString("fr-FR")} memories · ~${formatBytes(outsideFreeSelection.totalBytes)}`}
+                    recommended
+                    onClick={() =>
+                      applySelection(
+                        outsideFreeSelection,
+                        setFromDate,
+                        setToDate,
+                        setActivePreset,
+                        "outside-free",
+                      )
+                    }
+                  />
+                ) : null}
+                {fullSelection ? (
+                  <PeriodPresetOption
+                    active={activePreset === "all"}
+                    label="Toute la période"
+                    detail={`${fullSelection.count.toLocaleString("fr-FR")} memories`}
+                    onClick={() =>
+                      applySelection(
+                        fullSelection,
+                        setFromDate,
+                        setToDate,
+                        setActivePreset,
+                        "all",
+                      )
+                    }
+                  />
+                ) : null}
+                {recentSelection ? (
+                  <PeriodPresetOption
+                    active={activePreset === "recent-12m"}
+                    label="12 derniers mois"
+                    detail={`${recentSelection.count.toLocaleString("fr-FR")} memories`}
+                    onClick={() =>
+                      applySelection(
+                        recentSelection,
+                        setFromDate,
+                        setToDate,
+                        setActivePreset,
+                        "recent-12m",
+                      )
+                    }
+                  />
+                ) : null}
+              </div>
+
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <label className="space-y-2 text-sm">
+                  <span className="text-muted">Du</span>
+                  <input
+                    type="date"
+                    value={fromDate}
+                    min={bounds ? toInputDate(bounds.min) : undefined}
+                    max={toDate || (bounds ? toInputDate(bounds.max) : undefined)}
+                    onChange={(event) => {
+                      setFromDate(event.target.value);
+                      setActivePreset("custom");
+                    }}
+                    className="w-full rounded-xl border border-card-border bg-card px-3 py-2.5 text-foreground [color-scheme:dark]"
+                  />
+                </label>
+                <label className="space-y-2 text-sm">
+                  <span className="text-muted">Au</span>
+                  <input
+                    type="date"
+                    value={toDate}
+                    min={fromDate || (bounds ? toInputDate(bounds.min) : undefined)}
+                    max={bounds ? toInputDate(bounds.max) : undefined}
+                    onChange={(event) => {
+                      setToDate(event.target.value);
+                      setActivePreset("custom");
+                    }}
+                    className="w-full rounded-xl border border-card-border bg-card px-3 py-2.5 text-foreground [color-scheme:dark]"
+                  />
+                </label>
+              </div>
+
+              {freeTierNotice ? (
+                <p className="mt-4 text-sm text-muted">{freeTierNotice}</p>
+              ) : null}
+            </div>
+          </>
         ) : null}
 
         {importNotice ? (
@@ -289,37 +448,17 @@ export function ExportTool() {
       </section>
       </ScrollReveal>
 
-      <ScrollReveal delay={120}>
-      <ExportReminderPanel />
-      </ScrollReveal>
+      {memories.length === 0 ? (
+        <ScrollReveal delay={120}>
+          <ExportReminderPanel />
+        </ScrollReveal>
+      ) : null}
 
       {memories.length > 0 ? (
         <ScrollReveal delay={100}>
         <section className="rounded-3xl border border-card-border bg-card p-6">
-          <h2 className="text-xl font-medium">Filtrer par période</h2>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
-            <label className="space-y-2 text-sm">
-              <span className="text-muted">Du</span>
-              <input
-                type="date"
-                value={fromDate}
-                onChange={(event) => setFromDate(event.target.value)}
-                className="w-full rounded-xl border border-card-border bg-background px-3 py-2"
-              />
-            </label>
-            <label className="space-y-2 text-sm">
-              <span className="text-muted">Au</span>
-              <input
-                type="date"
-                value={toDate}
-                onChange={(event) => setToDate(event.target.value)}
-                className="w-full rounded-xl border border-card-border bg-background px-3 py-2"
-              />
-            </label>
-          </div>
-
           <div className="mt-6 space-y-3">
-            <h3 className="text-sm font-medium">Options v2</h3>
+            <h3 className="text-sm font-medium">Options d&apos;export</h3>
             <div className="grid gap-3 sm:grid-cols-3">
               <Toggle
                 label="Dates EXIF"
@@ -441,6 +580,37 @@ export function ExportTool() {
       </section>
       </ScrollReveal>
     </div>
+  );
+}
+
+function PeriodPresetOption({
+  label,
+  detail,
+  active,
+  recommended = false,
+  onClick,
+}: {
+  label: string;
+  detail: string;
+  active: boolean;
+  recommended?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-xl border px-4 py-3 text-left transition ${
+        active
+          ? recommended
+            ? "border-accent/70 bg-accent/10 text-foreground ring-1 ring-accent/40"
+            : "border-foreground/25 bg-card text-foreground ring-1 ring-foreground/10"
+          : "border-card-border bg-card text-muted hover:border-foreground/15 hover:text-foreground"
+      }`}
+    >
+      <span className="block text-sm font-medium">{label}</span>
+      <span className="mt-1 block text-xs leading-5 opacity-80">{detail}</span>
+    </button>
   );
 }
 
