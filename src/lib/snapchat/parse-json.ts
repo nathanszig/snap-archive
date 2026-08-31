@@ -8,7 +8,12 @@ import type {
 } from "./types";
 
 const MEMORIES_JSON_NAME = "memories_history.json";
-const MAIN_FILE_PATTERN = /\/memories\/(.+)-main\.(jpg|jpeg|png|mp4)$/i;
+const LEGACY_MAIN_PATTERN = /(?:^|\/)memories\/(.+)-main\.(jpg|jpeg|png|mp4)$/i;
+const BUNDLED_MEDIA_PATTERN = /(?:^|\/)memories\/([^/]+)\.(jpg|jpeg|mp4)$/i;
+
+function normalizeZipPath(path: string): string {
+  return path.replace(/\\/g, "/").replace(/^\/+/, "");
+}
 
 function extractMid(link: string): string {
   const match = link.match(/mid=([^&]+)/i);
@@ -94,18 +99,32 @@ function parseMainPath(
   path: string,
   lastModDate?: Date,
 ): Omit<IndexedMainFile, "zipFile" | "overlayPaths"> | null {
-  const match = path.match(MAIN_FILE_PATTERN);
+  const normalized = normalizeZipPath(path);
+  const lower = normalized.toLowerCase();
+
+  if (lower.endsWith(".html") || lower.endsWith(".png") || lower.endsWith("memories.html")) {
+    return null;
+  }
+
+  const legacy = normalized.match(LEGACY_MAIN_PATTERN);
+  const bundled = legacy ? null : normalized.match(BUNDLED_MEDIA_PATTERN);
+  const match = legacy ?? bundled;
   if (!match) return null;
 
-  const base = match[1];
+  const stem = match[1];
   const extension = match[2].toLowerCase();
-  const msMatch = base.match(/^(\d{10,13})/);
+  const msMatch = stem.match(/^(\d{10,13})/);
   let dateMs = msMatch ? Number(msMatch[1]) : null;
 
-  const humanDateMatch = base.match(/(\d{4}-\d{2}-\d{2})[_-](\d{2})-(\d{2})-(\d{2})/);
+  const humanDateMatch = stem.match(/^(\d{4}-\d{2}-\d{2})/);
   if (humanDateMatch) {
+    dateMs = Date.parse(`${humanDateMatch[1]}T12:00:00Z`);
+  }
+
+  const detailedDateMatch = stem.match(/(\d{4}-\d{2}-\d{2})[_-](\d{2})-(\d{2})-(\d{2})/);
+  if (detailedDateMatch) {
     dateMs = Date.parse(
-      `${humanDateMatch[1]}T${humanDateMatch[2]}:${humanDateMatch[3]}:${humanDateMatch[4]}Z`,
+      `${detailedDateMatch[1]}T${detailedDateMatch[2]}:${detailedDateMatch[3]}:${detailedDateMatch[4]}Z`,
     );
   }
 
@@ -113,22 +132,34 @@ function parseMainPath(
     dateMs = lastModDate.getTime();
   }
 
+  const resolvedDayKey = humanDateMatch
+    ? humanDateMatch[1]
+    : dateMs
+      ? dayKey(new Date(dateMs))
+      : lastModDate
+        ? dayKey(lastModDate)
+        : "";
+
   return {
-    mainPath: path,
+    mainPath: normalized,
     dateMs,
-    dayKey: dateMs ? dayKey(new Date(dateMs)) : lastModDate ? dayKey(lastModDate) : "",
+    dayKey: resolvedDayKey,
     mediaKind: extension === "mp4" ? "video" : "image",
   };
 }
 
 function findOverlayPaths(mainPath: string, paths: string[]): string[] {
-  const base = mainPath.replace(/-main\.[^/]+$/i, "");
+  const main = normalizeZipPath(mainPath);
+  const mainBase = main.replace(/-main\.[^/]+$/i, "").replace(/\.[^./]+$/i, "");
+
   return paths
-    .filter(
-      (path) =>
-        path.startsWith(`${base}-overlay.`) ||
-        path.startsWith(`${base}_-overlay.`),
-    )
+    .map(normalizeZipPath)
+    .filter((path) => {
+      if (!path.toLowerCase().endsWith(".png")) return false;
+      const pathBase = path.replace(/-overlay\.[^./]+$/i, "").replace(/\.[^./]+$/i, "");
+      if (pathBase === mainBase) return true;
+      return path.startsWith(`${mainBase}-overlay.`) || path.startsWith(`${mainBase}_-overlay.`);
+    })
     .sort((left, right) => left.localeCompare(right));
 }
 
@@ -143,13 +174,13 @@ async function indexMainFilesFromZip(
     const entries = await reader.getEntries();
     const paths = entries
       .filter((entry) => !entry.directory)
-      .map((entry) => entry.filename.replace(/\\/g, "/"));
+      .map((entry) => normalizeZipPath(entry.filename));
 
     const indexed: IndexedMainFile[] = [];
 
     for (const entry of entries) {
       if (entry.directory) continue;
-      const path = entry.filename.replace(/\\/g, "/");
+      const path = normalizeZipPath(entry.filename);
       const parsed = parseMainPath(path, entry.lastModDate);
       if (!parsed) continue;
 
@@ -221,7 +252,7 @@ function matchBundledMemories(
 
     matched.push({
       ...memory,
-      id: file.mainPath.split("/").pop()?.replace(/-main\.[^.]+$/, "") ?? memory.id,
+      id: file.mainPath.split("/").pop()?.replace(/\.[^.]+$/, "") ?? memory.id,
       localSource: {
         zipFile: file.zipFile,
         mainPath: file.mainPath,
@@ -427,11 +458,13 @@ export async function resolveMemoriesImport(
 
 export async function readZipEntryBytes(zipFile: File, entryPath: string): Promise<Uint8Array> {
   const reader = new ZipReader(new BlobReader(zipFile));
+  const normalizedTarget = normalizeZipPath(entryPath);
 
   try {
     const entries = await reader.getEntries();
     const entry = entries.find(
-      (candidate) => !candidate.directory && candidate.filename.replace(/\\/g, "/") === entryPath,
+      (candidate) =>
+        !candidate.directory && normalizeZipPath(candidate.filename) === normalizedTarget,
     );
 
     if (!entry || entry.directory) {
